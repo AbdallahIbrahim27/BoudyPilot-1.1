@@ -2,6 +2,8 @@
 
 BoudyPilot 1.1 is an AI-powered assistant built with **Streamlit**, **LangGraph**, **Mistral LLM**, and **Tavily API**. It provides precise, context-aware responses while leveraging external search when necessary. Each user has a dedicated chat memory for personalized interactions.
 
+🌐 **Live Demo:** [BoudyPilot 1.1 Demo](https://boudypilot-v1.streamlit.app/)
+
 ---
 
 ## 🚀 Features
@@ -83,7 +85,7 @@ The BoudyPilot workflow consists of three main nodes orchestrated using LangGrap
 
 ## ⚡ How It Works Step-by-Step
 
-1. User opens the Streamlit app.
+1. User opens the Streamlit app or visits the [live demo](https://boudypilot-v1.streamlit.app/).
 2. The app assigns a unique `user_id` and loads previous chat history.
 3. User submits a query.
 4. **Node 1:** Agent decides if online search is needed.
@@ -93,5 +95,4 @@ The BoudyPilot workflow consists of three main nodes orchestrated using LangGrap
 8. Chat history is saved for future sessions.
 
 ---
-   ```bash
-   pip install streamlit mistralai tavily langgraph
+
