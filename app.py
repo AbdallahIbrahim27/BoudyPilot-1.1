@@ -8,7 +8,7 @@ import json
 import os
 
 # -------------------- Load Secrets --------------------
-MODEL = "mistral-large-latest"
+MODEL = "mistral-large-2512"
 client = Mistral(api_key=st.secrets["MISTRAL_API_KEY"])
 tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
 CHAT_HISTORY_FILE = "chat_history.json"
@@ -178,5 +178,6 @@ if user_input:
     last_msg = st.session_state.chat_memory["messages"][-1]
     with st.chat_message("assistant"):
         st.write(last_msg.content)
+
 
 
