@@ -105,7 +105,7 @@ agent = builder.compile()
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="LangGraph AI Agent", page_icon="🤖")
 
-st.title("🤖 LangGraph AI Agent with Tavily + Mistral")
+st.title("🤖 BoudyPilot 1.1 ")
 
 # Load chat memory
 if "chat_memory" not in st.session_state:
@@ -138,5 +138,6 @@ if user_input:
 
     with st.chat_message("assistant"):
         st.write(last_msg.content)
+
 
 
