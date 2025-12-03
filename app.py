@@ -150,7 +150,7 @@ agent = builder.compile()
 
 # -------------------- Streamlit UI --------------------
 st.set_page_config(page_title="BoudyPilot 1.1", page_icon="🤖")
-st.title("🤖 BoudyPilot 1.1 — Low-Hallucination AI Agent")
+st.title("🤖 BoudyPilot 1.1 — AI Agent")
 
 # Load chat memory once
 if "chat_memory" not in st.session_state:
@@ -178,6 +178,7 @@ if user_input:
     last_msg = st.session_state.chat_memory["messages"][-1]
     with st.chat_message("assistant"):
         st.write(last_msg.content)
+
 
 
 
