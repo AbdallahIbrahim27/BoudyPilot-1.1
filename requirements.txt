@@ -1,0 +1,8 @@
+streamlit
+langchain
+langchain-core
+langgraph
+mistralai
+tavily-python
+pydantic
+typing-extensions
