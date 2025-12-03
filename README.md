@@ -95,4 +95,5 @@ The BoudyPilot workflow consists of three main nodes orchestrated using LangGrap
 8. Chat history is saved for future sessions.
 
 ---
+![agent diagram](https://github.com/user-attachments/assets/87169d62-1c17-4b33-a1a9-1f9a705ea40e)
 
