@@ -13,19 +13,23 @@ client = Mistral(api_key=st.secrets["MISTRAL_API_KEY"])
 tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
 CHAT_HISTORY_FILE = "chat_history.json"
 
-# -------------------- Helper --------------------
+
+# -------------------- Helper: merge messages --------------------
 def _add_messages(left: List[BaseMessage], right: List[BaseMessage]) -> List[BaseMessage]:
     return left + right
+
 
 # -------------------- State Definition --------------------
 class MessagesState(TypedDict):
     messages: Annotated[List[BaseMessage], _add_messages]
+
 
 # -------------------- Memory Persistence --------------------
 def save_chat(filename, messages):
     data = [{"type": m.type, "content": m.content} for m in messages]
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
 
 def load_chat(filename):
     if not os.path.exists(filename):
@@ -45,48 +49,89 @@ def load_chat(filename):
 
     return {"messages": messages}
 
+
 # -------------------- Node 1: Search-Decider --------------------
 def decide_search_llm(state: MessagesState) -> MessagesState:
-    role_map = {"human": "user", "ai": "assistant", "system": "system"}
 
-    msgs = [{"role": role_map[m.type], "content": m.content} for m in state["messages"]]
-    msgs.append({
-        "role": "system",
-        "content": (
-            "You are a search-decider. Return ONLY 'SEARCH_REQUIRED' "
-            "or 'NO_SEARCH'."
-        )
-    })
+    # Get ONLY last user message
+    last_user = None
+    for m in reversed(state["messages"]):
+        if isinstance(m, HumanMessage):
+            last_user = m.content
+            break
+
+    msgs = [
+        {
+            "role": "system",
+            "content": (
+                "You decide if the question needs online search.\n"
+                "Return ONLY:\n"
+                "- SEARCH_REQUIRED (if up-to-date info is needed)\n"
+                "- NO_SEARCH (if general knowledge can answer it)"
+            )
+        },
+        {"role": "user", "content": last_user},
+    ]
 
     resp = client.chat.complete(model=MODEL, messages=msgs)
     decision = resp.choices[0].message.content.strip().upper()
+
     if decision not in ["SEARCH_REQUIRED", "NO_SEARCH"]:
         decision = "SEARCH_REQUIRED"
+
     return {"messages": [SystemMessage(content=decision)]}
+
 
 # -------------------- Node 2: Tavily Search --------------------
 def tavily_search_node(state: MessagesState) -> MessagesState:
-    question = state["messages"][-2].content
-    result = tavily.search(query=question, max_results=5)
-    summary = result["results"][0]["content"] if result["results"] else "No search results."
-    return {"messages": [SystemMessage(content=f"SEARCH_RESULT: {summary}")]}
+    # Extract last user question only
+    question = [m.content for m in state["messages"] if isinstance(m, HumanMessage)][-1]
 
-# -------------------- Node 3: LLM Response --------------------
+    result = tavily.search(query=question, max_results=3)
+
+    clean_summary = "\n".join([r["content"] for r in result["results"]])
+
+    return {"messages": [SystemMessage(content=f"SEARCH_RESULT: {clean_summary}")]}
+
+
+# -------------------- Node 3: Final Answer (Low-Hallucination) --------------------
 def llm_call(state: MessagesState) -> MessagesState:
-    role_map = {"human": "user", "ai": "assistant", "system": "system"}
 
-    msgs = [{"role": role_map[m.type], "content": m.content} for m in state["messages"]]
-    resp = client.chat.complete(model=MODEL, messages=msgs)
-    msg = resp.choices[0].message
+    clean_msgs = []
 
-    if msg.role == "assistant":
-        out = AIMessage(content=msg.content)
-    else:
-        out = SystemMessage(content=msg.content)
+    # Filter relevant messages only
+    for m in state["messages"]:
+        if isinstance(m, HumanMessage):
+            clean_msgs.append({"role": "user", "content": m.content})
 
-    return {"messages": [out]}
+        if m.content.startswith("SEARCH_RESULT:"):
+            clean_msgs.append({
+                "role": "system",
+                "content": (
+                    "Here is verified search information:\n"
+                    + m.content.replace("SEARCH_RESULT:", "").strip()
+                )
+            })
 
-# -------------------- Build Graph --------------------
+    # Add grounding system safety message
+    clean_msgs.insert(0, {
+        "role": "system",
+        "content": (
+            "You are a precise AI assistant. Do NOT hallucinate.\n"
+            "- Use ONLY the information you have.\n"
+            "- If unsure or missing data, say: 'I am not sure.'\n"
+            "- Do not invent facts.\n"
+            "- Prioritize accuracy over creativity."
+        )
+    })
+
+    resp = client.chat.complete(model=MODEL, messages=clean_msgs)
+    final_msg = resp.choices[0].message.content
+
+    return {"messages": [AIMessage(content=final_msg)]}
+
+
+# -------------------- Build LangGraph --------------------
 builder = StateGraph(MessagesState)
 builder.add_node("decide_search", decide_search_llm)
 builder.add_node("search_node", tavily_search_node)
@@ -102,23 +147,19 @@ builder.add_edge("search_node", "llm_call")
 
 agent = builder.compile()
 
+
 # -------------------- Streamlit UI --------------------
-st.set_page_config(page_title="LangGraph AI Agent", page_icon="🤖")
+st.set_page_config(page_title="BoudyPilot 1.1", page_icon="🤖")
+st.title("🤖 BoudyPilot 1.1 — Low-Hallucination AI Agent")
 
-st.title("🤖 BoudyPilot 1.1 ")
-
-# Load chat memory
+# Load chat memory once
 if "chat_memory" not in st.session_state:
     st.session_state.chat_memory = load_chat(CHAT_HISTORY_FILE)
 
-# Show chat history
+# Display chat history
 for msg in st.session_state.chat_memory["messages"]:
-    if msg.type == "human":
-        with st.chat_message("user"):
-            st.write(msg.content)
-    else:
-        with st.chat_message("assistant"):
-            st.write(msg.content)
+    with st.chat_message("user" if msg.type == "human" else "assistant"):
+        st.write(msg.content)
 
 # Chat input
 user_input = st.chat_input("Ask me anything...")
@@ -133,11 +174,7 @@ if user_input:
     # Save memory
     save_chat(CHAT_HISTORY_FILE, st.session_state.chat_memory["messages"])
 
-    # Display last bot reply
+    # Show response
     last_msg = st.session_state.chat_memory["messages"][-1]
-
     with st.chat_message("assistant"):
         st.write(last_msg.content)
-
-
-
