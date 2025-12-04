@@ -93,7 +93,7 @@ def llm_call(state: MessagesState) -> MessagesState:
         )
     })
 
-    resp = client.chat.complete(model=MODEL, messages=clean_msgs, temperature=0.0, max_tokens=1024)
+    resp = client.chat.complete(model=MODEL, messages=clean_msgs, temperature=0.0, max_tokens=2048)
     return {"messages": [AIMessage(content=resp.choices[0].message.content)]}
 
 # -------------------- Build LangGraph --------------------
@@ -141,4 +141,5 @@ if user_input:
     last_msg = st.session_state.chat_memory["messages"][-1]
     with st.chat_message("assistant"):
         st.write(last_msg.content)
+
 
