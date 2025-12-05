@@ -6,3 +6,5 @@ mistralai
 tavily-python
 pydantic
 typing-extensions
+sendgrid
+
