@@ -4,20 +4,25 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, System
 from langgraph.graph import StateGraph, START
 from mistralai import Mistral
 from tavily import TavilyClient
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 import json
 import os
 import uuid
+import re
+import ast
 
 # -------------------- Load Secrets --------------------
-MODEL = "mistral-large-2512"  # Updated model
+MODEL = "mistral-large-2512"
 client = Mistral(api_key=st.secrets["MISTRAL_API_KEY"])
 tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
+SENDGRID_API_KEY = st.secrets.get("SENDGRID_API_KEY", "")
+FROM_EMAIL = st.secrets.get("FROM_EMAIL", "")
 
 # -------------------- Helper --------------------
 def _add_messages(left: List[BaseMessage], right: List[BaseMessage]) -> List[BaseMessage]:
     return left + right
 
-# -------------------- State Definition --------------------
 class MessagesState(TypedDict):
     messages: Annotated[List[BaseMessage], _add_messages]
 
@@ -25,56 +30,163 @@ class MessagesState(TypedDict):
 if "user_id" not in st.session_state:
     st.session_state["user_id"] = str(uuid.uuid4())
 user_id = st.session_state["user_id"]
-CHAT_MEMORY_FILE = f"chat_history_{user_id}.json"
+CHATS_FILE = f"multi_chat_history_{user_id}.json"
 
-# -------------------- Memory Persistence --------------------
-def save_chat(filename, messages):
-    data = [{"type": m.type, "content": m.content} for m in messages]
+# -------------------- Multi-chat Memory --------------------
+def save_chats(filename, chats):
+    data = {}
+    for chat_id, chat_data in chats.items():
+        messages = chat_data["messages"]
+        title = chat_data.get("title", f"Chat {chat_id[:6]}")
+        data[chat_id] = {
+            "title": title,
+            "messages": [{"type": m.type, "content": m.content} for m in messages]
+        }
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def load_chat(filename):
+def load_chats(filename):
     if not os.path.exists(filename):
-        return {"messages": []}
+        return {}
     with open(filename, "r", encoding="utf-8") as f:
         data = json.load(f)
-    messages = []
-    for m in data:
-        if m["type"] == "human":
-            messages.append(HumanMessage(content=m["content"]))
-        elif m["type"] == "ai":
-            messages.append(AIMessage(content=m["content"]))
-        else:
-            messages.append(SystemMessage(content=m["content"]))
-    return {"messages": messages}
+    chats = {}
+    for chat_id, c in data.items():
+        messages = []
+        for m in c.get("messages", []):
+            if m["type"] == "human":
+                messages.append(HumanMessage(content=m["content"]))
+            elif m["type"] == "ai":
+                messages.append(AIMessage(content=m["content"]))
+            else:
+                messages.append(SystemMessage(content=m["content"]))
+        chats[chat_id] = {"messages": messages, "title": c.get("title", f"Chat {chat_id[:6]}")}
+    return chats
 
-# -------------------- Node 1: Search-Decider --------------------
-def decide_search_llm(state: MessagesState) -> MessagesState:
+if "chats" not in st.session_state:
+    st.session_state.chats = load_chats(CHATS_FILE)
+
+# Convert old list-based chats to dict
+for chat_id, chat in st.session_state.chats.items():
+    if isinstance(chat, list):
+        st.session_state.chats[chat_id] = {"messages": chat, "title": f"Chat {chat_id[:6]}"}
+
+if "current_chat_id" not in st.session_state:
+    if st.session_state.chats:
+        st.session_state.current_chat_id = list(st.session_state.chats.keys())[0]
+    else:
+        new_id = str(uuid.uuid4())
+        st.session_state.chats[new_id] = {"messages": [], "title": f"Chat {new_id[:6]}"}
+        st.session_state.current_chat_id = new_id
+
+# ============================================================
+#               SENDGRID EMAIL TOOL
+# ============================================================
+def send_email_tool(to_email: str, subject: str, content: str) -> str:
+    try:
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        message = Mail(
+            from_email=FROM_EMAIL,
+            to_emails=to_email,
+            subject=subject,
+            html_content=content,
+        )
+        response = sg.send(message)
+        return f"Email sent successfully (status {response.status_code})."
+    except Exception as e:
+        return f"Error sending email: {e}"
+
+# ============================================================
+#        NODE 0: Decide if user wants to send an email
+# ============================================================
+def decide_email_or_search(state: MessagesState) -> MessagesState:
     last_user = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
     msgs = [
-        {"role": "system", "content": (
-            "You decide if the question needs online search. "
-            "Respond ONLY with SEARCH_REQUIRED or NO_SEARCH."
-        )},
+        {"role": "system", "content":
+         """Classify the user's intent. Respond ONLY with:
+         - SEND_EMAIL
+         - SEARCH_REQUIRED
+         - NO_SEARCH
+         """},
         {"role": "user", "content": last_user}
     ]
     resp = client.chat.complete(model=MODEL, messages=msgs, temperature=0.0)
     decision = resp.choices[0].message.content.strip().upper()
-    if decision not in ["SEARCH_REQUIRED", "NO_SEARCH"]:
-        decision = "SEARCH_REQUIRED"
-    return {"messages": [SystemMessage(content=decision)]}
+    if decision not in ["SEND_EMAIL", "SEARCH_REQUIRED", "NO_SEARCH"]:
+        decision = "NO_SEARCH"
+    state["messages"].append(SystemMessage(content=decision))
+    return state
 
-# -------------------- Node 2: Tavily Search --------------------
+# ============================================================
+#        NODE 1: Extract email parameters (robust)
+# ============================================================
+def extract_email_parameters(state: MessagesState) -> MessagesState:
+    last_user = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
+    
+    msgs = [
+        {"role": "system", "content":
+         """You are an AI assistant. Extract email fields STRICTLY in valid JSON.
+Respond ONLY with JSON, no explanations, no backticks.
+Format:
+{
+  "to": "recipient@example.com",
+  "subject": "Subject here",
+  "content": "Body content here"
+}
+Ensure:
+- Use double quotes
+- Escape any quotes inside content
+- Do not include extra text
+"""}, 
+        {"role": "user", "content": last_user}
+    ]
+    
+    resp = client.chat.complete(model=MODEL, messages=msgs, temperature=0.0)
+    llm_output = resp.choices[0].message.content.strip()
+
+    match = re.search(r"\{.*\}", llm_output, re.DOTALL)
+    if not match:
+        state["messages"].append(SystemMessage(content="SEND_EMAIL_ERROR: Could not extract JSON from LLM."))
+        return state
+
+    json_text = match.group().strip()
+
+    # Try parsing JSON safely
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError:
+        try:
+            # fallback for slight invalid JSON
+            data = ast.literal_eval(json_text)
+        except Exception as e:
+            state["messages"].append(SystemMessage(content=f"SEND_EMAIL_ERROR: JSON parse error: {e}"))
+            return state
+
+    # Extract fields
+    to_email = data.get("to")
+    subject = data.get("subject", "No Subject")
+    content = data.get("content", "")
+
+    if not to_email or "@" not in to_email:
+        state["messages"].append(SystemMessage(content="SEND_EMAIL_ERROR: Missing or invalid 'to' email address."))
+        return state
+
+    result_text = send_email_tool(to_email, subject, content)
+    state["messages"].append(SystemMessage(content=result_text))
+    return state
+
+# ============================================================
+#        EXISTING NODES (Search + LLM Answer)
+# ============================================================
 def tavily_search_node(state: MessagesState) -> MessagesState:
     question = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
     result = tavily.search(query=question, max_results=3)
     clean_summary = "\n".join([r["content"] for r in result["results"]])
-    return {"messages": [SystemMessage(content=f"SEARCH_RESULT: {clean_summary}")]}
+    state["messages"].append(SystemMessage(content=f"SEARCH_RESULT: {clean_summary}"))
+    return state
 
-# -------------------- Node 3: Final LLM Response --------------------
 def llm_call(state: MessagesState) -> MessagesState:
     clean_msgs = []
-
     for m in state["messages"]:
         if isinstance(m, HumanMessage):
             clean_msgs.append({"role": "user", "content": m.content})
@@ -83,63 +195,100 @@ def llm_call(state: MessagesState) -> MessagesState:
                 "role": "system",
                 "content": "Here is verified search info:\n" + m.content.replace("SEARCH_RESULT:", "").strip()
             })
-
-    clean_msgs.insert(0, {
-        "role": "system",
-        "content": (
-            "You are a precise AI assistant. Do NOT hallucinate. "
-            "Only use provided information. "
-            "If unsure, respond: 'I am not sure.'"
-        )
-    })
-
+    clean_msgs.insert(0, {"role": "system", "content": "You are a precise AI assistant. Do NOT hallucinate. If unsure, respond: 'I am not sure.'"})
     resp = client.chat.complete(model=MODEL, messages=clean_msgs, temperature=0.0, max_tokens=2048)
-    return {"messages": [AIMessage(content=resp.choices[0].message.content)]}
+    state["messages"].append(AIMessage(content=resp.choices[0].message.content))
+    return state
 
-# -------------------- Build LangGraph --------------------
+# ============================================================
+#                     BUILD GRAPH
+# ============================================================
 builder = StateGraph(MessagesState)
-builder.add_node("decide_search", decide_search_llm)
+builder.add_node("decide", decide_email_or_search)
+builder.add_node("extract_email", extract_email_parameters)
 builder.add_node("search_node", tavily_search_node)
 builder.add_node("llm_call", llm_call)
 
-builder.add_edge(START, "decide_search")
+builder.add_edge(START, "decide")
 builder.add_conditional_edges(
-    "decide_search",
+    "decide",
     lambda s: s["messages"][-1].content,
-    {"SEARCH_REQUIRED": "search_node", "NO_SEARCH": "llm_call"},
+    {
+        "SEND_EMAIL": "extract_email",
+        "SEARCH_REQUIRED": "search_node",
+        "NO_SEARCH": "llm_call",
+    },
 )
 builder.add_edge("search_node", "llm_call")
+
 agent = builder.compile()
 
-# -------------------- Streamlit UI --------------------
-st.set_page_config(page_title="BoudyPilot 1.1", page_icon="🤖")
-st.title("🤖 BoudyPilot 1.1 — AI Agent")
+# ============================================================
+#                     STREAMLIT UI
+# ============================================================
+st.set_page_config(page_title="BoudyPilot 1.2.1", page_icon="🤖")
+st.title("🤖 BoudyPilot 1.2.1 — Multi-Chat AI Agent")
 
-# Load chat memory per user
-if "chat_memory" not in st.session_state:
-    st.session_state.chat_memory = load_chat(CHAT_MEMORY_FILE)
+# -------------------- Sidebar --------------------
+st.sidebar.title("Your Chats")
 
-# Display chat history
-for msg in st.session_state.chat_memory["messages"]:
-    with st.chat_message("user" if msg.type == "human" else "assistant"):
-        st.write(msg.content)
+current_chat = st.session_state.chats[st.session_state.current_chat_id]
+new_title = st.sidebar.text_input(
+    "Rename Current Chat",
+    value=current_chat.get("title", f"Chat {st.session_state.current_chat_id[:6]}")
+)
+if new_title != current_chat.get("title"):
+    st.session_state.chats[st.session_state.current_chat_id]["title"] = new_title
+    save_chats(CHATS_FILE, st.session_state.chats)
 
-# Chat input
+if st.sidebar.button("➕ New Chat"):
+    new_id = str(uuid.uuid4())
+    st.session_state.chats[new_id] = {"messages": [], "title": f"Chat {new_id[:6]}"}
+    st.session_state.current_chat_id = new_id
+    st.rerun()
+
+for chat_id, chat_data in st.session_state.chats.items():
+    label = chat_data.get("title", f"Chat {chat_id[:6]}")
+    if st.sidebar.button(label):
+        st.session_state.current_chat_id = chat_id
+        st.rerun()
+
+if st.sidebar.button("🗑️ Clear Current Chat"):
+    st.session_state.chats[st.session_state.current_chat_id]["messages"] = []
+    save_chats(CHATS_FILE, st.session_state.chats)
+    st.rerun()
+
+current_messages = st.session_state.chats[st.session_state.current_chat_id]["messages"]
+if current_messages:
+    json_data = json.dumps(
+        [{"type": m.type, "content": m.content} for m in current_messages],
+        ensure_ascii=False,
+        indent=2,
+    )
+    st.sidebar.download_button(
+        label="⬇️ Download Current Chat (JSON)",
+        data=json_data,
+        file_name=f"chat_{st.session_state.current_chat_id}.json",
+        mime="application/json",
+    )
+
+chat_container = st.container()
+with chat_container:
+    for msg in current_messages:
+        role = "user" if msg.type == "human" else "assistant"
+        with st.chat_message(role):
+            st.write(msg.content)
+
 user_input = st.chat_input("Ask me anything...")
 
 if user_input:
-    # Add user message
-    st.session_state.chat_memory["messages"].append(HumanMessage(content=user_input))
-
-    # Run agent
+    st.session_state.chats[st.session_state.current_chat_id]["messages"].append(HumanMessage(content=user_input))
+    st.session_state.chat_memory = {"messages": st.session_state.chats[st.session_state.current_chat_id]["messages"]}
     st.session_state.chat_memory = agent.invoke(st.session_state.chat_memory)
-
-    # Save memory
-    save_chat(CHAT_MEMORY_FILE, st.session_state.chat_memory["messages"])
-
-    # Display last bot reply
-    last_msg = st.session_state.chat_memory["messages"][-1]
-    with st.chat_message("assistant"):
-        st.write(last_msg.content)
-
-
+    st.session_state.chats[st.session_state.current_chat_id]["messages"] = st.session_state.chat_memory["messages"]
+    save_chats(CHATS_FILE, st.session_state.chats)
+    with chat_container:
+        for msg in st.session_state.chat_memory["messages"][-2:]:
+            role = "user" if msg.type == "human" else "assistant"
+            with st.chat_message(role):
+                st.write(msg.content)
