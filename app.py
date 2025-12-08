@@ -226,8 +226,8 @@ agent = builder.compile()
 # ============================================================
 #                     STREAMLIT UI
 # ============================================================
-st.set_page_config(page_title="BoudyPilot 1.2.1", page_icon="🤖")
-st.title("🤖 BoudyPilot 1.2.1 — Multi-Chat AI Agent")
+st.set_page_config(page_title="BoudyPilot 1.3", page_icon="🤖")
+st.title("🤖 BoudyPilot 1.3 — Multi-Chat AI Agent")
 
 # -------------------- Sidebar --------------------
 st.sidebar.title("Your Chats")
@@ -292,3 +292,4 @@ if user_input:
             role = "user" if msg.type == "human" else "assistant"
             with st.chat_message(role):
                 st.write(msg.content)
+
