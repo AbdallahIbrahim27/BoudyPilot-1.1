@@ -1,5 +1,5 @@
 import streamlit as st
-from typing import TypedDict, Annotated, List
+from typing import TypedDict, List
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, START
 from mistralai import Mistral
@@ -19,12 +19,9 @@ tavily = TavilyClient(api_key=st.secrets["TAVILY_API_KEY"])
 SENDGRID_API_KEY = st.secrets.get("SENDGRID_API_KEY", "")
 FROM_EMAIL = st.secrets.get("FROM_EMAIL", "")
 
-# -------------------- Helper --------------------
-def _add_messages(left: List[BaseMessage], right: List[BaseMessage]) -> List[BaseMessage]:
-    return left + right
-
+# -------------------- TypedDict --------------------
 class MessagesState(TypedDict):
-    messages: Annotated[List[BaseMessage], _add_messages]
+    messages: List[BaseMessage]
 
 # -------------------- User Identification --------------------
 if "user_id" not in st.session_state:
@@ -80,7 +77,7 @@ if "current_chat_id" not in st.session_state:
         st.session_state.current_chat_id = new_id
 
 # ============================================================
-#               SENDGRID EMAIL TOOL
+#                     SENDGRID EMAIL TOOL
 # ============================================================
 def send_email_tool(to_email: str, subject: str, content: str) -> str:
     try:
@@ -151,18 +148,15 @@ Ensure:
 
     json_text = match.group().strip()
 
-    # Try parsing JSON safely
     try:
         data = json.loads(json_text)
     except json.JSONDecodeError:
         try:
-            # fallback for slight invalid JSON
             data = ast.literal_eval(json_text)
         except Exception as e:
             state["messages"].append(SystemMessage(content=f"SEND_EMAIL_ERROR: JSON parse error: {e}"))
             return state
 
-    # Extract fields
     to_email = data.get("to")
     subject = data.get("subject", "No Subject")
     content = data.get("content", "")
@@ -176,7 +170,7 @@ Ensure:
     return state
 
 # ============================================================
-#        EXISTING NODES (Search + LLM Answer)
+#        SEARCH + LLM Nodes
 # ============================================================
 def tavily_search_node(state: MessagesState) -> MessagesState:
     question = next((m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), "")
@@ -220,7 +214,6 @@ builder.add_conditional_edges(
     },
 )
 builder.add_edge("search_node", "llm_call")
-
 agent = builder.compile()
 
 # ============================================================
@@ -272,6 +265,7 @@ if current_messages:
         mime="application/json",
     )
 
+# -------------------- Chat Container --------------------
 chat_container = st.container()
 with chat_container:
     for msg in current_messages:
@@ -279,17 +273,29 @@ with chat_container:
         with st.chat_message(role):
             st.write(msg.content)
 
+# -------------------- User Input --------------------
 user_input = st.chat_input("Ask me anything...")
 
 if user_input:
-    st.session_state.chats[st.session_state.current_chat_id]["messages"].append(HumanMessage(content=user_input))
+    # 1️⃣ Show user message instantly
+    user_msg = HumanMessage(content=user_input)
+    st.session_state.chats[st.session_state.current_chat_id]["messages"].append(user_msg)
+    with chat_container:
+        with st.chat_message("user"):
+            st.write(user_input)
+
+    # 2️⃣ Update agent memory and invoke agent
     st.session_state.chat_memory = {"messages": st.session_state.chats[st.session_state.current_chat_id]["messages"]}
     st.session_state.chat_memory = agent.invoke(st.session_state.chat_memory)
+
+    # 3️⃣ Show new assistant messages
+    new_messages = st.session_state.chat_memory["messages"][len(st.session_state.chats[st.session_state.current_chat_id]["messages"])-1:]
+    for msg in new_messages:
+        if msg.type != "human":
+            with chat_container:
+                with st.chat_message("assistant"):
+                    st.write(msg.content)
+
+    # 4️⃣ Save updated chat
     st.session_state.chats[st.session_state.current_chat_id]["messages"] = st.session_state.chat_memory["messages"]
     save_chats(CHATS_FILE, st.session_state.chats)
-    with chat_container:
-        for msg in st.session_state.chat_memory["messages"][-2:]:
-            role = "user" if msg.type == "human" else "assistant"
-            with st.chat_message(role):
-                st.write(msg.content)
-
