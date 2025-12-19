@@ -1,8 +1,8 @@
 # 🤖 BoudyPilot 1.3
 
-BoudyPilot 1.3 is an AI-powered assistant built with **Streamlit**, **LangGraph**, **Mistral LLM**, and **Tavily API**. It provides precise, context-aware responses while leveraging external search when necessary. Each user has a dedicated chat memory for personalized interactions.
+BoudyPilot 1.3 is an AI-powered assistant built with **Streamlit**, **LangGraph**, **Mistral LLM**, and **Tavily API**. It provides precise, context-aware responses while leveraging external search when necessary. Each user has a dedicated chat memory for personalized interactions. The system also supports **email notifications via SendGrid**.
 
-🌐 **Live Demo:** [BoudyPilot 1.1 Demo](https://boudypilot-v1.streamlit.app/)
+🌐 **Live Demo:** [BoudyPilot 1.3 Demo](https://boudypilot-v1.streamlit.app/)
 
 ---
 
@@ -14,6 +14,7 @@ BoudyPilot 1.3 is an AI-powered assistant built with **Streamlit**, **LangGraph*
 - Persistent chat memory per user.
 - Streamlit-based interactive chat interface.
 - Minimal hallucinations through guided LLM prompts.
+- **Email notifications** using SendGrid.
 
 ---
 
@@ -23,8 +24,9 @@ BoudyPilot 1.3 is an AI-powered assistant built with **Streamlit**, **LangGraph*
 - **AI / LLM:** [Mistral Large 2512](https://mistral.ai/) via `mistralai` Python SDK  
 - **Graph-based Agent:** [LangGraph](https://github.com/langgraph/langgraph) for workflow orchestration  
 - **Search / Knowledge API:** [Tavily](https://www.tavily.com/)  
+- **Email Service:** [SendGrid](https://sendgrid.com/) for sending notifications and alerts  
 - **Storage:** JSON files for per-user chat memory  
-- **Python Libraries:** `uuid`, `typing`, `json`, `os`  
+- **Python Libraries:** `uuid`, `typing`, `json`, `os`, `sendgrid`  
 
 ---
 
@@ -68,7 +70,31 @@ The BoudyPilot workflow consists of three main nodes orchestrated using LangGrap
 
 ---
 
-### 5️⃣ Streamlit Chat Interface
+### 5️⃣ Optional Node 4: Email Notifications
+- Uses **SendGrid** to send emails to users.
+- Can notify users of responses, updates, or alerts.
+- Configured using environment variable: `SENDGRID_API_KEY`.
+- Example:
+
+```python
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+import os
+
+def send_email(to_email, subject, content):
+    message = Mail(
+        from_email='no-reply@boudypilot.com',
+        to_emails=to_email,
+        subject=subject,
+        html_content=content
+    )
+    sg = SendGridAPIClient(os.environ.get("SENDGRID_API_KEY"))
+    sg.send(message)
+```
+
+---
+
+### 6️⃣ Streamlit Chat Interface
 - Displays previous messages from the user's chat history.
 - Accepts new user input via `st.chat_input`.
 - Updates the memory after each interaction.
@@ -83,17 +109,67 @@ The BoudyPilot workflow consists of three main nodes orchestrated using LangGrap
 
 ---
 
-## ⚡ How It Works Step-by-Step
+## 🐳 Dockerization
 
-1. User opens the Streamlit app or visits the [live demo](https://boudypilot-v1.streamlit.app/).
-2. The app assigns a unique `user_id` and loads previous chat history.
-3. User submits a query.
-4. **Node 1:** Agent decides if online search is needed.
-5. **Node 2 (optional):** Performs Tavily search if required.
-6. **Node 3:** LLM generates the final response using context + search results.
-7. Response is displayed in Streamlit.
-8. Chat history is saved for future sessions.
+BoudyPilot 1.3 is fully **Dockerized**, allowing easy deployment without manually installing dependencies.
+
+### 1️⃣ Dockerfile
+
+```dockerfile
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+```
+
+### 2️⃣ Docker Compose Example
+
+```yaml
+version: "3.9"
+
+services:
+  boudypilot:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      MISTRAL_API_KEY: your_mistral_api_key
+      TAVILY_API_KEY: your_tavily_api_key
+      SENDGRID_API_KEY: your_sendgrid_api_key
+```
+
+### 3️⃣ Benefits of Dockerization
+
+- **Environment Consistency:** Same environment on any machine or server.  
+- **Simplified Deployment:** Run with a single command:  
+  ```bash
+  docker-compose up --build
+  ```  
+- **Isolation:** Dependencies and Python version isolated from your host system.  
+- **Portability:** Share the Docker image or `docker-compose.yml` with teammates.  
 
 ---
-![agent diagram](https://github.com/user-attachments/assets/87169d62-1c17-4b33-a1a9-1f9a705ea40e)
+
+## ⚡ How It Works Step-by-Step
+
+1. User opens the Streamlit app or visits the [live demo](https://boudypilot-v1.streamlit.app/).  
+2. The app assigns a unique `user_id` and loads previous chat history.  
+3. User submits a query.  
+4. **Node 1:** Agent decides if online search is needed.  
+5. **Node 2 (optional):** Performs Tavily search if required.  
+6. **Node 3:** LLM generates the final response using context + search results.  
+7. **Node 4 (optional):** Sends email notifications via SendGrid.  
+8. Response is displayed in Streamlit.  
+9. Chat history is saved for future sessions.  
+
+---
+
+![agent diagram](https://i.ibb.co/yntbFRLP/agent-diagram.png)
 
