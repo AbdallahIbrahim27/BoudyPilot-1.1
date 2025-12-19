@@ -1,6 +1,6 @@
-# 🤖 BoudyPilot 1.1
+# 🤖 BoudyPilot 1.3
 
-BoudyPilot 1.1 is an AI-powered assistant built with **Streamlit**, **LangGraph**, **Mistral LLM**, and **Tavily API**. It provides precise, context-aware responses while leveraging external search when necessary. Each user has a dedicated chat memory for personalized interactions.
+BoudyPilot 1.3 is an AI-powered assistant built with **Streamlit**, **LangGraph**, **Mistral LLM**, and **Tavily API**. It provides precise, context-aware responses while leveraging external search when necessary. Each user has a dedicated chat memory for personalized interactions.
 
 🌐 **Live Demo:** [BoudyPilot 1.1 Demo](https://boudypilot-v1.streamlit.app/)
 
