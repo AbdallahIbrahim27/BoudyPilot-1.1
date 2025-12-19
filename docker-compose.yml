@@ -6,9 +6,10 @@ services:
     ports:
       - "8501:8501"
     environment:
-      MISTRAL_API_KEY: 9YHjvYnt3uEJ5riSS4p5Lr8SduY5TwL8
-      TAVILY_API_KEY: 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
-      SENDGRID_API_KEY: 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
-      FROM_EMAIL: abdallah_619107@oi.edu.eg
+      MISTRAL_API_KEY: YOUR KEEEEYYY :)
+      TAVILY_API_KEY: YOUR KEEEEYYY :)
+      SENDGRID_API_KEY: YOUR KEEEEYYY :)
+      FROM_EMAIL: YOUR MAIL :)
     volumes:
       - ./:/app
+
